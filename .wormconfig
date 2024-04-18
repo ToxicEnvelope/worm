@@ -1,0 +1,4 @@
+key default
+scan ./tests
+ip_local default
+ip_resolver default

