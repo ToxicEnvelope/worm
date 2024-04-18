@@ -172,17 +172,8 @@ class Host:
                     if name.endswith(infected_tag):
                         with open(os.path.join(root, name), "rb") as fin:
                             encrypted_data = json.load(fin)
-                            obj = {
-                                "checksum": encrypted_data["checksum"],
-                                "iv": [self.crypto.DecodeAES(i) for i in
-                                       self.crypto.DecodeAES(encrypted_data["iv"]).split(delimiter)],
-                                "fileData": self.crypto.DecodeAES(encrypted_data["fileData"]),
-                                "encryptedVirus": [self.crypto.DecodeAES(i) for i in
-                                                   self.crypto.DecodeAES(encrypted_data["encryptedVirus"]).split(
-                                                       delimiter)]
-                            }
                         with open(os.path.join(root, name+clean_tag), "w") as fout:
-                            json.dump(obj, fout, indent=2)
+                            fout.write(self.crypto.DecodeAES(encrypted_data["fileData"]))
                         os.remove(os.path.join(root, name))
         else:
             with open(self.crypto.scan, 'rb') as fin:
