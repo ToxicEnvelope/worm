@@ -170,6 +170,9 @@ class Host:
             sys.exit(0)
         wd = WormDigest()
         wd.cipher = AES.new(key, AES.MODE_ECB)
+        if wd.EncodeAES(delimiter.encode()) != self.crypto.EncodeAES(delimiter.encode()):
+            sys.stdout.write("[!] key is wrong , did not passed delimiter test [!]")
+            sys.exit(0)
         if os.path.isdir(self.crypto.config.scan):
             for root, dirs, files in os.walk(self.crypto.config.scan):
                 for name in files:
