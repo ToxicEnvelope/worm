@@ -1,4 +1,4 @@
-key default
+key 0000eretpass1111
 scan ./tests
 ip_local default
 ip_resolver default

