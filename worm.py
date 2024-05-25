@@ -27,7 +27,7 @@ class WormConfig:
             for line in conf.readlines():
                 k, v = line.replace('\n', '').split(' ')
                 if 'key' in k and 'default' not in v:
-                    self.key = v
+                    self.key = v[:32] if len(v) > 32 else v
                 elif 'scan' in k and 'default' not in v:
                     self.scan = v
                 elif 'ip_local' in k and 'default' not in v:
@@ -53,16 +53,14 @@ class WormDigest:
     def EncodeAES(self, plaintext):
         if isinstance(plaintext, str):
             plaintext = plaintext.encode('utf-8')
-        padded = pad(plaintext, AES.block_size)
-        enc = self.cipher.encrypt(padded)
+        enc = self.cipher.encrypt(pad(plaintext, AES.block_size))
         return base64.urlsafe_b64encode(enc).decode('utf-8')
 
     def DecodeAES(self, ciphertext):
         if isinstance(ciphertext, str):
             ciphertext = ciphertext.encode()
         enc = base64.urlsafe_b64decode(ciphertext)
-        unpadded = self.cipher.decrypt(enc)
-        return unpad(unpadded, AES.block_size).decode("utf-8")
+        return unpad(self.cipher.decrypt(enc), AES.block_size).decode("utf-8")
 
 
 @dataclass
